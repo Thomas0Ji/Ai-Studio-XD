@@ -1,0 +1,93 @@
+!pip install python-telegram-bot==20.3 moviepy TTS ffmpeg-python pillow --quiet
+!sudo apt-get update -qq && sudo apt-get install -y ffmpeg libheif-examples
+
+# 2️⃣ โค้ดบอทเต็มระบบ
+import os, asyncio, tempfile
+from telegram import Update, InputFile, ReplyKeyboardMarkup
+from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes
+from moviepy.editor import ImageSequenceClip, AudioFileClip
+from TTS.api import TTS
+
+# === TOKEN ของคุณ ===
+TOKEN = "8143985946:AAEuULl355JlaQjDmcHe_vAzFMBhXqqhKKY"
+
+# === ตั้งค่าเสียงพากย์ ===
+tts = TTS("tts_models/thai/glow-tts", progress_bar=False, gpu=False)
+
+# === สร้างโฟลเดอร์เก็บงาน ===
+os.makedirs("jobs", exist_ok=True)
+
+# === ฟังก์ชันของบอท ===
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    menu = [["/สร้างวิดีโอ ตัวอย่างวิดีโอแรก"], ["/ล้างรูป", "/วิธีใช้"]]
+    await update.message.reply_text(
+        "👋 สวัสดี! ผมคือบอทสร้างวิดีโออัจฉริยะ 🎬\n\n"
+        "ส่งรูปหลายภาพ แล้วพิมพ์คำสั่ง /สร้างวิดีโอ ตามด้วยข้อความพากย์ได้เลย",
+        reply_markup=ReplyKeyboardMarkup(menu, resize_keyboard=True)
+    )
+
+async def photo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    job_dir = f"jobs/{user_id}"
+    os.makedirs(job_dir, exist_ok=True)
+    file = await update.message.photo[-1].get_file()
+    path = os.path.join(job_dir, f"img_{len(os.listdir(job_dir))}.jpg")
+    await file.download_to_drive(path)
+    await update.message.reply_text(f"✅ รับรูปแล้ว: {os.path.basename(path)}")
+
+async def clear_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    job_dir = f"jobs/{user_id}"
+    if os.path.exists(job_dir):
+        for f in os.listdir(job_dir):
+            os.remove(os.path.join(job_dir, f))
+        await update.message.reply_text("🧹 ลบรูปทั้งหมดเรียบร้อย!")
+    else:
+        await update.message.reply_text("ยังไม่มีรูปที่เก็บไว้นะ!")
+
+async def help_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text(
+        "📖 วิธีใช้:\n"
+        "1️⃣ ส่งรูปหลายภาพให้บอท\n"
+        "2️⃣ พิมพ์ /สร้างวิดีโอ <ข้อความที่อยากให้พากย์>\n"
+        "3️⃣ รอให้ระบบสร้างวิดีโอ 🎥"
+    )
+
+async def make_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    text = " ".join(context.args)
+    if not text:
+        await update.message.reply_text("⚠️ กรุณาพิมพ์ข้อความหลังคำสั่ง /สร้างวิดีโอ ด้วยครับ")
+        return
+
+    user_id = update.effective_user.id
+    job_dir = f"jobs/{user_id}"
+    imgs = sorted([os.path.join(job_dir, f) for f in os.listdir(job_dir) if f.endswith('.jpg')])
+
+    if not imgs:
+        await update.message.reply_text("❌ ยังไม่มีรูปเลย ส่งรูปมาก่อนนะครับ!")
+        return
+
+    await update.message.reply_text("🎬 กำลังสร้างวิดีโอ... รอสักครู่!")
+
+    audio_path = os.path.join(job_dir, "voice.wav")
+    tts.tts_to_file(text=text, file_path=audio_path)
+
+    clip = ImageSequenceClip(imgs, fps=1)
+    audioclip = AudioFileClip(audio_path)
+    clip = clip.set_audio(audioclip)
+    out_path = os.path.join(job_dir, "final.mp4")
+    clip.write_videofile(out_path, fps=24, codec="libx264", audio_codec="aac")
+
+    await update.message.reply_video(video=InputFile(out_path))
+    await update.message.reply_text("✨ เสร็จเรียบร้อย! วิดีโอของคุณพร้อมแล้ว 🎥")
+
+# === สร้างบอท ===
+app = ApplicationBuilder().token(TOKEN).build()
+app.add_handler(CommandHandler("start", start))
+app.add_handler(CommandHandler("ล้างรูป", clear_handler))
+app.add_handler(CommandHandler("วิธีใช้", help_handler))
+app.add_handler(CommandHandler("สร้างวิดีโอ", make_handler))
+app.add_handler(MessageHandler(filters.PHOTO, photo_handler))
+
+print("🚀 บอทเริ่มทำงานแล้ว...")
+app.run_polling()
